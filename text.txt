@@ -1,0 +1,360 @@
+"""
+Gul Hospital - Patient Management System
+------------------------------------------
+A simple desktop application (Tkinter + SQLite) to manage patient records.
+
+Fields:
+    - Patient ID (auto-generated, unique)
+    - Name
+    - Consultant Name (Doctor)
+    - Age
+    - Gender
+    - Fees
+
+Run with:  python hospital_management.py
+Requires: Python 3.8+ (Tkinter is included with standard Python on Windows)
+"""
+
+import sqlite3
+import tkinter as tk
+from tkinter import ttk, messagebox
+import os
+
+DB_NAME = "hospital.db"
+
+
+class Database:
+    """Handles all SQLite database operations."""
+
+    def __init__(self, db_name=DB_NAME):
+        # Store the database file next to the script, regardless of
+        # which folder the app is launched from.
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.db_path = os.path.join(base_dir, db_name)
+        self.conn = sqlite3.connect(self.db_path)
+        self.cursor = self.conn.cursor()
+        self._create_table()
+
+    def _create_table(self):
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS patients (
+                patient_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                consultant_name TEXT,
+                age INTEGER,
+                gender TEXT,
+                fees REAL
+            )
+        """)
+        self.conn.commit()
+
+    def add_patient(self, name, consultant_name, age, gender, fees):
+        self.cursor.execute("""
+            INSERT INTO patients (name, consultant_name, age, gender, fees)
+            VALUES (?, ?, ?, ?, ?)
+        """, (name, consultant_name, age, gender, fees))
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def update_patient(self, patient_id, name, consultant_name, age, gender, fees):
+        self.cursor.execute("""
+            UPDATE patients
+            SET name = ?, consultant_name = ?, age = ?, gender = ?, fees = ?
+            WHERE patient_id = ?
+        """, (name, consultant_name, age, gender, fees, patient_id))
+        self.conn.commit()
+
+    def delete_patient(self, patient_id):
+        self.cursor.execute("DELETE FROM patients WHERE patient_id = ?", (patient_id,))
+        self.conn.commit()
+
+    def get_all_patients(self):
+        self.cursor.execute("SELECT * FROM patients ORDER BY patient_id DESC")
+        return self.cursor.fetchall()
+
+    def search_patients(self, keyword):
+        like_kw = f"%{keyword}%"
+        self.cursor.execute("""
+            SELECT * FROM patients
+            WHERE CAST(patient_id AS TEXT) LIKE ?
+               OR name LIKE ?
+               OR consultant_name LIKE ?
+            ORDER BY patient_id DESC
+        """, (like_kw, like_kw, like_kw))
+        return self.cursor.fetchall()
+
+    def close(self):
+        self.conn.close()
+
+
+class HospitalApp:
+    """Main Tkinter application."""
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Gul Hospital - Patient Management System")
+        self.root.geometry("950x600")
+        self.root.configure(bg="#eaf2f8")
+        self.root.minsize(850, 550)
+
+        self.db = Database()
+        self.selected_patient_id = None
+
+        self._build_header()
+        self._build_form()
+        self._build_buttons()
+        self._build_search()
+        self._build_table()
+
+        self.refresh_table()
+
+    # ---------------------------------------------------------
+    # UI BUILDERS
+    # ---------------------------------------------------------
+    def _build_header(self):
+        header = tk.Frame(self.root, bg="#1a5276", height=60)
+        header.pack(fill="x")
+        tk.Label(
+            header, text="Gul Hospital - Patient Management System",
+            bg="#1a5276", fg="white", font=("Arial", 18, "bold")
+        ).pack(pady=12)
+
+    def _build_form(self):
+        form_frame = tk.LabelFrame(
+            self.root, text="Patient Details", bg="#eaf2f8",
+            font=("Arial", 11, "bold"), padx=15, pady=15
+        )
+        form_frame.pack(fill="x", padx=15, pady=10)
+
+        labels = ["Patient ID", "Name", "Consultant Name", "Age", "Gender", "Fees"]
+        self.entries = {}
+
+        for i, label in enumerate(labels):
+            row, col = divmod(i, 3)
+            tk.Label(
+                form_frame, text=label + ":", bg="#eaf2f8",
+                font=("Arial", 10, "bold")
+            ).grid(row=row * 2, column=col, sticky="w", padx=10, pady=(5, 0))
+
+            if label == "Gender":
+                var = tk.StringVar(value="Male")
+                widget = ttk.Combobox(
+                    form_frame, textvariable=var,
+                    values=["Male", "Female", "Other"],
+                    state="readonly", width=22
+                )
+                self.entries[label] = var
+            elif label == "Patient ID":
+                widget = tk.Entry(form_frame, width=25, state="readonly",
+                                   disabledbackground="#d6dbdf")
+                self.entries[label] = widget
+            else:
+                widget = tk.Entry(form_frame, width=25)
+                self.entries[label] = widget
+
+            widget.grid(row=row * 2 + 1, column=col, padx=10, pady=(0, 10), sticky="w")
+
+    def _build_buttons(self):
+        btn_frame = tk.Frame(self.root, bg="#eaf2f8")
+        btn_frame.pack(fill="x", padx=15, pady=5)
+
+        buttons = [
+            ("Add Patient", "#27ae60", self.add_patient),
+            ("Update Selected", "#2980b9", self.update_patient),
+            ("Delete Selected", "#c0392b", self.delete_patient),
+            ("Clear Form", "#7f8c8d", self.clear_form),
+        ]
+
+        for text, color, cmd in buttons:
+            tk.Button(
+                btn_frame, text=text, bg=color, fg="white",
+                font=("Arial", 10, "bold"), padx=12, pady=6,
+                relief="flat", command=cmd
+            ).pack(side="left", padx=8)
+
+    def _build_search(self):
+        search_frame = tk.Frame(self.root, bg="#eaf2f8")
+        search_frame.pack(fill="x", padx=15, pady=(5, 0))
+
+        tk.Label(
+            search_frame, text="Search (ID / Name / Consultant):",
+            bg="#eaf2f8", font=("Arial", 10, "bold")
+        ).pack(side="left", padx=(0, 8))
+
+        self.search_var = tk.StringVar()
+        search_entry = tk.Entry(search_frame, textvariable=self.search_var, width=30)
+        search_entry.pack(side="left")
+        search_entry.bind("<KeyRelease>", lambda e: self.refresh_table())
+
+        tk.Button(
+            search_frame, text="Show All", bg="#8e44ad", fg="white",
+            font=("Arial", 9, "bold"), command=self.clear_search
+        ).pack(side="left", padx=8)
+
+    def _build_table(self):
+        table_frame = tk.Frame(self.root, bg="#eaf2f8")
+        table_frame.pack(fill="both", expand=True, padx=15, pady=10)
+
+        columns = ("id", "name", "consultant", "age", "gender", "fees")
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=12)
+
+        headings = {
+            "id": "Patient ID", "name": "Name", "consultant": "Consultant Name",
+            "age": "Age", "gender": "Gender", "fees": "Fees (Rs.)"
+        }
+        widths = {"id": 90, "name": 180, "consultant": 180, "age": 70, "gender": 90, "fees": 100}
+
+        for col in columns:
+            self.tree.heading(col, text=headings[col])
+            self.tree.column(col, width=widths[col], anchor="center")
+
+        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+
+        self.tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self.tree.bind("<<TreeviewSelect>>", self.on_row_select)
+
+    # ---------------------------------------------------------
+    # ACTIONS
+    # ---------------------------------------------------------
+    def _get_form_values(self):
+        name = self.entries["Name"].get().strip()
+        consultant = self.entries["Consultant Name"].get().strip()
+        age = self.entries["Age"].get().strip()
+        gender = self.entries["Gender"].get()
+        fees = self.entries["Fees"].get().strip()
+        return name, consultant, age, gender, fees
+
+    def add_patient(self):
+        name, consultant, age, gender, fees = self._get_form_values()
+
+        if not name:
+            messagebox.showwarning("Missing Data", "Patient Name is required.")
+            return
+
+        try:
+            age_val = int(age) if age else None
+        except ValueError:
+            messagebox.showerror("Invalid Data", "Age must be a number.")
+            return
+
+        try:
+            fees_val = float(fees) if fees else 0.0
+        except ValueError:
+            messagebox.showerror("Invalid Data", "Fees must be a number.")
+            return
+
+        new_id = self.db.add_patient(name, consultant, age_val, gender, fees_val)
+        messagebox.showinfo("Success", f"Patient added successfully.\nPatient ID: {new_id}")
+        self.clear_form()
+        self.refresh_table()
+
+    def update_patient(self):
+        if not self.selected_patient_id:
+            messagebox.showwarning("No Selection", "Please select a patient from the table first.")
+            return
+
+        name, consultant, age, gender, fees = self._get_form_values()
+
+        if not name:
+            messagebox.showwarning("Missing Data", "Patient Name is required.")
+            return
+
+        try:
+            age_val = int(age) if age else None
+        except ValueError:
+            messagebox.showerror("Invalid Data", "Age must be a number.")
+            return
+
+        try:
+            fees_val = float(fees) if fees else 0.0
+        except ValueError:
+            messagebox.showerror("Invalid Data", "Fees must be a number.")
+            return
+
+        self.db.update_patient(self.selected_patient_id, name, consultant, age_val, gender, fees_val)
+        messagebox.showinfo("Success", "Patient record updated successfully.")
+        self.clear_form()
+        self.refresh_table()
+
+    def delete_patient(self):
+        if not self.selected_patient_id:
+            messagebox.showwarning("No Selection", "Please select a patient from the table first.")
+            return
+
+        confirm = messagebox.askyesno(
+            "Confirm Delete",
+            f"Are you sure you want to delete patient ID {self.selected_patient_id}?"
+        )
+        if confirm:
+            self.db.delete_patient(self.selected_patient_id)
+            messagebox.showinfo("Deleted", "Patient record deleted.")
+            self.clear_form()
+            self.refresh_table()
+
+    def clear_form(self):
+        self.entries["Patient ID"].config(state="normal")
+        self.entries["Patient ID"].delete(0, tk.END)
+        self.entries["Patient ID"].config(state="readonly")
+
+        self.entries["Name"].delete(0, tk.END)
+        self.entries["Consultant Name"].delete(0, tk.END)
+        self.entries["Age"].delete(0, tk.END)
+        self.entries["Gender"].set("Male")
+        self.entries["Fees"].delete(0, tk.END)
+
+        self.selected_patient_id = None
+        self.tree.selection_remove(self.tree.selection())
+
+    def clear_search(self):
+        self.search_var.set("")
+        self.refresh_table()
+
+    def on_row_select(self, event):
+        selected = self.tree.selection()
+        if not selected:
+            return
+        values = self.tree.item(selected[0], "values")
+        self.selected_patient_id = int(values[0])
+
+        self.entries["Patient ID"].config(state="normal")
+        self.entries["Patient ID"].delete(0, tk.END)
+        self.entries["Patient ID"].insert(0, values[0])
+        self.entries["Patient ID"].config(state="readonly")
+
+        self.entries["Name"].delete(0, tk.END)
+        self.entries["Name"].insert(0, values[1])
+
+        self.entries["Consultant Name"].delete(0, tk.END)
+        self.entries["Consultant Name"].insert(0, values[2])
+
+        self.entries["Age"].delete(0, tk.END)
+        self.entries["Age"].insert(0, values[3])
+
+        self.entries["Gender"].set(values[4])
+
+        self.entries["Fees"].delete(0, tk.END)
+        self.entries["Fees"].insert(0, values[5])
+
+    def refresh_table(self):
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+
+        keyword = self.search_var.get().strip() if hasattr(self, "search_var") else ""
+        rows = self.db.search_patients(keyword) if keyword else self.db.get_all_patients()
+
+        for row in rows:
+            self.tree.insert("", "end", values=row)
+
+    def on_close(self):
+        self.db.close()
+        self.root.destroy()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = HospitalApp(root)
+    root.protocol("WM_DELETE_WINDOW", app.on_close)
+    root.mainloop()
